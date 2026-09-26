@@ -295,7 +295,7 @@ if not st.session_state.room_id:
                     supabase.table("players").insert(
                         {
                             "room_id": new_room_id,
-                            "player_name": host_name,
+                            "player_name": host_name.strip(),
                             "icon_id": selected_icon,
                             "score": 0,
                             "hp": 100,
@@ -305,7 +305,7 @@ if not st.session_state.room_id:
                 )
 
                 st.session_state.room_id = new_room_id
-                st.session_state.player_name = host_name
+                st.session_state.player_name = host_name.strip()
                 st.session_state.player_id = res.data[0]["id"]
                 st.rerun()
 
@@ -325,19 +325,32 @@ if not st.session_state.room_id:
             st.image(icon_path_g, width=80)
 
         if st.button("ルームに参加"):
-            if join_room_id and guest_name.strip():
+            clean_room_id = join_room_id.strip().upper()
+
+            if clean_room_id and guest_name.strip():
+                # room_id カラムで検索
                 target_room = (
                     supabase.table("rooms")
                     .select("*")
-                    .eq("room_id", join_room_id.upper())
+                    .eq("room_id", clean_room_id)
                     .execute()
                 )
+
+                # カラム名が id の場合にも備えてフォールバック検索
+                if not target_room.data:
+                    target_room = (
+                        supabase.table("rooms")
+                        .select("*")
+                        .eq("id", clean_room_id)
+                        .execute()
+                    )
+
                 if target_room.data:
                     res = safe_execute(
                         supabase.table("players").insert(
                             {
-                                "room_id": join_room_id.upper(),
-                                "player_name": guest_name,
+                                "room_id": clean_room_id,
+                                "player_name": guest_name.strip(),
                                 "icon_id": selected_icon_g,
                                 "score": 0,
                                 "hp": 100,
@@ -346,22 +359,31 @@ if not st.session_state.room_id:
                         )
                     )
 
-                    st.session_state.room_id = join_room_id.upper()
-                    st.session_state.player_name = guest_name
+                    st.session_state.room_id = clean_room_id
+                    st.session_state.player_name = guest_name.strip()
                     st.session_state.player_id = res.data[0]["id"]
                     st.rerun()
                 else:
-                    st.error("指定されたルームIDが見つかりません。")
+                    st.error(
+                        f"指定されたルームID（'{clean_room_id}'）が見つかりません。"
+                    )
+            else:
+                st.warning("ルームIDと名前を入力してください。")
 
 # B. ゲーム対戦画面
 else:
     room_id = st.session_state.room_id
     player_id = st.session_state.player_id
 
-    # 最新状態取得
+    # 最新状態取得（room_id または id カラムに対応）
     room_res = (
         supabase.table("rooms").select("*").eq("room_id", room_id).execute()
     )
+    if not room_res.data:
+        room_res = (
+            supabase.table("rooms").select("*").eq("id", room_id).execute()
+        )
+
     players_res = (
         supabase.table("players").select("*").eq("room_id", room_id).execute()
     )
@@ -400,11 +422,15 @@ else:
 
         if len(players_data) >= 1:
             if st.button("バトルスタート！", type="primary"):
-                safe_execute(
-                    supabase.table("rooms")
-                    .update({"status": "playing", "step": 0})
-                    .eq("room_id", room_id)
-                )
+                # room_id カラム更新試行、失敗時は id カラムで更新
+                try:
+                    supabase.table("rooms").update(
+                        {"status": "playing", "step": 0}
+                    ).eq("room_id", room_id).execute()
+                except Exception:
+                    supabase.table("rooms").update(
+                        {"status": "playing", "step": 0}
+                    ).eq("id", room_id).execute()
                 st.rerun()
 
         time.sleep(2)
@@ -420,11 +446,14 @@ else:
 
         # 10問終了時、または全員HP0でリザルト画面へ
         if step >= len(questions) or len(active_players) == 0:
-            safe_execute(
-                supabase.table("rooms")
-                .update({"status": "finished"})
-                .eq("room_id", room_id)
-            )
+            try:
+                supabase.table("rooms").update({"status": "finished"}).eq(
+                    "room_id", room_id
+                ).execute()
+            except Exception:
+                supabase.table("rooms").update({"status": "finished"}).eq(
+                    "id", room_id
+                ).execute()
             st.rerun()
 
         current_q = questions[step]
@@ -533,11 +562,14 @@ else:
         if len(ans_res.data) >= len(players_data):
             time.sleep(1.5)
             # 全員回答済みのため次の問題に進む
-            safe_execute(
-                supabase.table("rooms")
-                .update({"step": step + 1})
-                .eq("room_id", room_id)
-            )
+            try:
+                supabase.table("rooms").update({"step": step + 1}).eq(
+                    "room_id", room_id
+                ).execute()
+            except Exception:
+                supabase.table("rooms").update({"step": step + 1}).eq(
+                    "id", room_id
+                ).execute()
             st.rerun()
 
         time.sleep(2)
