@@ -328,7 +328,6 @@ if not st.session_state.room_id:
             clean_room_id = join_room_id.strip().upper()
 
             if clean_room_id and guest_name.strip():
-                # room_id カラムで検索
                 target_room = (
                     supabase.table("rooms")
                     .select("*")
@@ -336,7 +335,6 @@ if not st.session_state.room_id:
                     .execute()
                 )
 
-                # カラム名が id の場合にも備えてフォールバック検索
                 if not target_room.data:
                     target_room = (
                         supabase.table("rooms")
@@ -375,7 +373,7 @@ else:
     room_id = st.session_state.room_id
     player_id = st.session_state.player_id
 
-    # 最新状態取得（room_id または id カラムに対応）
+    # 最新状態取得
     room_res = (
         supabase.table("rooms").select("*").eq("room_id", room_id).execute()
     )
@@ -399,7 +397,7 @@ else:
     status = room_data["status"]
     step = room_data["step"]
 
-    # ヘッダーと途中退室ボタンの配置
+    # ヘッダーと途中退室ボタン
     head_col1, head_col2 = st.columns([4, 1])
     with head_col1:
         st.title(f"⚔️ 早押し英単語バトル (ROOM: {room_id})")
@@ -422,7 +420,6 @@ else:
 
         if len(players_data) >= 1:
             if st.button("バトルスタート！", type="primary"):
-                # room_id カラム更新試行、失敗時は id カラムで更新
                 try:
                     supabase.table("rooms").update(
                         {"status": "playing", "step": 0}
@@ -438,13 +435,10 @@ else:
 
     # B-2. プレイ画面
     elif status == "playing":
-        # 部屋IDを共通キーとして、全参加者にまったく同じ10問を抽出
         questions = get_shuffled_10_questions(raw_questions, room_id)
 
-        # 生存プレイヤーチェック
         active_players = [p for p in players_data if p.get("hp", 100) > 0]
 
-        # 10問終了時、または全員HP0でリザルト画面へ
         if step >= len(questions) or len(active_players) == 0:
             try:
                 supabase.table("rooms").update({"status": "finished"}).eq(
@@ -474,18 +468,16 @@ else:
 
         st.divider()
 
-        # 問題表示（全10問固定）
+        # 問題表示
         st.header(f"第 {step + 1} 問 / {len(questions)}")
         st.subheader("以下の英単語の意味を選択してください")
         st.markdown(f"# **{current_q['word']}**")
 
-        # 選択肢のシャッフル（部屋IDと問題番号から共通配置を生成）
         option_seed = abs(hash(f"{room_id}_{step}")) % (2**32)
         shuffled_options = current_q["options"].copy()
         random.seed(option_seed)
         random.shuffle(shuffled_options)
 
-        # すでにこの問題に回答しているか確認
         my_ans = (
             supabase.table("answers")
             .select("*")
@@ -498,7 +490,6 @@ else:
         if len(my_ans.data) > 0:
             st.success("回答を送信しました！他のプレイヤーの回答を待っています...")
         else:
-            # 4択ボタン（全員同じランダム配置のボタンを表示）
             b_cols = st.columns(2)
             for idx, opt in enumerate(shuffled_options):
                 with b_cols[idx % 2]:
@@ -507,7 +498,7 @@ else:
                     ):
                         is_correct = opt == current_q["answer"]
 
-                        # 回答記録（早押し判定用）
+                        # ① 先に自分の回答を記録
                         safe_execute(
                             supabase.table("answers").insert(
                                 {
@@ -520,7 +511,30 @@ else:
                             )
                         )
 
-                        # スコアとHPの更新計算
+                        # ② 正解者の中での着順（回答順位）を判定
+                        existing_correct_ans = (
+                            supabase.table("answers")
+                            .select("*")
+                            .eq("room_id", room_id)
+                            .eq("step", step)
+                            .eq("is_correct", True)
+                            .execute()
+                        )
+
+                        # 正解者の件数（自分が正解の場合は最低1位）
+                        correct_count = len(existing_correct_ans.data)
+
+                        # 着順に応じた基本スコア
+                        if correct_count == 1:
+                            base_pts = 150  # 1位正解
+                        elif correct_count == 2:
+                            base_pts = 120  # 2位正解
+                        elif correct_count == 3:
+                            base_pts = 100  # 3位正解
+                        else:
+                            base_pts = 80  # 4位以降正解
+
+                        # ③ スコア・HP・コンボの計算
                         me = next(
                             (p for p in players_data if p["id"] == player_id),
                             None,
@@ -532,7 +546,8 @@ else:
 
                             if is_correct:
                                 new_combo += 1
-                                new_score += 100 + (new_combo * 10)
+                                # 早押し着順点 + コンボボーナス
+                                new_score += base_pts + (new_combo * 10)
                             else:
                                 new_combo = 0
                                 new_hp = max(0, new_hp - 20)
@@ -561,7 +576,6 @@ else:
         )
         if len(ans_res.data) >= len(players_data):
             time.sleep(1.5)
-            # 全員回答済みのため次の問題に進む
             try:
                 supabase.table("rooms").update({"step": step + 1}).eq(
                     "room_id", room_id
@@ -580,7 +594,6 @@ else:
         st.balloons()
         st.header("🏆 ゲームセット！最終結果")
 
-        # スコア順にソート
         sorted_players = sorted(
             players_data, key=lambda x: x.get("score", 0), reverse=True
         )
