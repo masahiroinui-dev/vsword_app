@@ -123,7 +123,7 @@ st.markdown(bg_css, unsafe_allow_html=True)
 st.markdown(
     """
 <style>
-/* タイトルや見出し文字の読みやすさ向上（コンパクトな半透明白カード） */
+/* タイトルや見出し文字の読みやすさ向上 */
 h1, h2, h3 {
     background-color: rgba(255, 255, 255, 0.85) !important;
     padding: 4px 12px !important;
@@ -163,6 +163,24 @@ def safe_execute(query_builder):
     except Exception as e:
         st.error(f"データベースエラーが発生しました: {e}")
         raise e
+
+
+# ==========================================
+# 途中退室処理関数
+# ==========================================
+def leave_room():
+    """ルームを退室し、セッションおよびデータベースを初期化"""
+    if st.session_state.player_id:
+        try:
+            supabase.table("players").delete().eq(
+                "id", st.session_state.player_id
+            ).execute()
+        except Exception:
+            pass
+    st.session_state.room_id = None
+    st.session_state.player_id = None
+    st.session_state.player_name = ""
+    st.rerun()
 
 
 # ==========================================
@@ -211,7 +229,6 @@ def load_questions():
 def get_shuffled_10_questions(raw_q, room_id=None):
     q_copy = raw_q.copy()
     if room_id:
-        # room_id の文字列からハッシュ値を計算して乱数シードにする
         seed_value = abs(hash(room_id)) % (2**32)
         random.seed(seed_value)
     else:
@@ -351,6 +368,8 @@ else:
 
     if not room_res.data:
         st.error("ルーム情報が存在しません。")
+        if st.button("ロビーへ戻る"):
+            leave_room()
         st.stop()
 
     room_data = room_res.data[0]
@@ -358,7 +377,13 @@ else:
     status = room_data["status"]
     step = room_data["step"]
 
-    st.title(f"⚔️ 早押し英単語バトル (ROOM: {room_id})")
+    # ヘッダーと途中退室ボタンの配置
+    head_col1, head_col2 = st.columns([4, 1])
+    with head_col1:
+        st.title(f"⚔️ 早押し英単語バトル (ROOM: {room_id})")
+    with head_col2:
+        if st.button("🚪 途中退室", key="leave_btn"):
+            leave_room()
 
     # B-1. 待機画面
     if status == "waiting":
@@ -405,7 +430,7 @@ else:
         current_q = questions[step]
 
         # プレイヤー情報表示
-        cols = st.columns(len(players_data))
+        cols = st.columns(len(players_data) if players_data else 1)
         for idx, p in enumerate(players_data):
             with cols[idx]:
                 p_icon = get_icon_path(p.get("icon_id"))
@@ -468,30 +493,32 @@ else:
 
                         # スコアとHPの更新計算
                         me = next(
-                            p for p in players_data if p["id"] == player_id
+                            (p for p in players_data if p["id"] == player_id),
+                            None,
                         )
-                        new_score = me.get("score", 0)
-                        new_hp = me.get("hp", 100)
-                        new_combo = me.get("combo", 0)
+                        if me:
+                            new_score = me.get("score", 0)
+                            new_hp = me.get("hp", 100)
+                            new_combo = me.get("combo", 0)
 
-                        if is_correct:
-                            new_combo += 1
-                            new_score += 100 + (new_combo * 10)
-                        else:
-                            new_combo = 0
-                            new_hp = max(0, new_hp - 20)
+                            if is_correct:
+                                new_combo += 1
+                                new_score += 100 + (new_combo * 10)
+                            else:
+                                new_combo = 0
+                                new_hp = max(0, new_hp - 20)
 
-                        safe_execute(
-                            supabase.table("players")
-                            .update(
-                                {
-                                    "score": new_score,
-                                    "hp": new_hp,
-                                    "combo": new_combo,
-                                }
+                            safe_execute(
+                                supabase.table("players")
+                                .update(
+                                    {
+                                        "score": new_score,
+                                        "hp": new_hp,
+                                        "combo": new_combo,
+                                    }
+                                )
+                                .eq("id", player_id)
                             )
-                            .eq("id", player_id)
-                        )
 
                         st.rerun()
 
@@ -542,5 +569,4 @@ else:
             st.divider()
 
         if st.button("ロビーへ戻る"):
-            st.session_state.room_id = None
-            st.rerun()
+            leave_room()
