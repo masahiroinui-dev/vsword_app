@@ -1,3 +1,4 @@
+import base64
 import os
 import random
 import time
@@ -13,6 +14,9 @@ st.set_page_config(
     page_icon="⚔️",
     layout="wide",
 )
+
+# 出題上限（10問固定）
+MAX_QUESTIONS = 10
 
 # ==========================================
 # Supabase 接続設定
@@ -95,8 +99,6 @@ def get_background_style():
             break
 
     if bg_file:
-        import base64
-
         with open(bg_file, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
         return f"""
@@ -113,7 +115,7 @@ def get_background_style():
 
 
 # ==========================================
-# 文字見やすさ向上のためのカスタムCSS
+# デザイン・CSS調整（背景を隠さないスマートな装飾）
 # ==========================================
 bg_css = get_background_style()
 st.markdown(bg_css, unsafe_allow_html=True)
@@ -121,37 +123,30 @@ st.markdown(bg_css, unsafe_allow_html=True)
 st.markdown(
     """
 <style>
-/* 全体の基本テキスト設定 */
-.stApp {
-    color: #111111;
-}
-
-/* タイトル・見出し・段落テキストの可読性向上（半透明の白背景カード化） */
-h1, h2, h3, h4, .stMarkdown p {
-    background-color: rgba(255, 255, 255, 0.88) !important;
-    padding: 6px 14px !important;
-    border-radius: 8px !important;
-    box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.15) !important;
+/* タイトルや見出し文字の読みやすさ向上（コンパクトな半透明白カード） */
+h1, h2, h3 {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    padding: 4px 12px !important;
+    border-radius: 6px !important;
     display: inline-block !important;
     color: #111111 !important;
-    font-weight: bold !important;
-    margin-bottom: 8px !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
 }
 
-/* プレイヤー枠・ブロック要素の視認性向上 */
+/* プレイヤー情報などのブロック部分 */
 div[data-testid="stVerticalBlock"] > div {
-    background-color: rgba(255, 255, 255, 0.82);
-    padding: 8px;
-    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.70) !important;
+    border-radius: 8px !important;
+    padding: 6px !important;
 }
 
-/* ボタン要素のスタイル調整 */
+/* ボタンのデザイン */
 .stButton > button {
-    background-color: rgba(255, 255, 255, 0.95) !important;
+    background-color: rgba(255, 255, 255, 0.9) !important;
     color: #111111 !important;
     font-weight: bold !important;
-    border: 2px solid #333333 !important;
-    border-radius: 8px !important;
+    border: 2px solid #222222 !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
 }
 </style>
 """,
@@ -197,18 +192,32 @@ def load_questions():
     df = pd.read_csv(csv_path)
     questions = []
     for _, row in df.iterrows():
-        # 正解は option1 または answer カラムから取得
-        ans = str(row["answer"]) if "answer" in row and pd.notna(row["answer"]) else str(row["option1"])
+        ans = (
+            str(row["answer"])
+            if "answer" in row and pd.notna(row["answer"])
+            else str(row["option1"])
+        )
         opts = [
             str(row["option1"]),
             str(row["option2"]),
             str(row["option3"]),
             str(row["option4"]),
         ]
-        questions.append(
-            {"word": row["word"], "options": opts, "answer": ans}
-        )
+        questions.append({"word": row["word"], "options": opts, "answer": ans})
     return questions
+
+
+# ルームIDをシード値にして「全員共通の10問」を抽出する関数
+def get_shuffled_10_questions(raw_q, room_id=None):
+    q_copy = raw_q.copy()
+    if room_id:
+        # room_id の文字列からハッシュ値を計算して乱数シードにする
+        seed_value = abs(hash(room_id)) % (2**32)
+        random.seed(seed_value)
+    else:
+        random.seed(int(time.time()))
+    random.shuffle(q_copy)
+    return q_copy[:MAX_QUESTIONS]
 
 
 # ==========================================
@@ -220,19 +229,8 @@ if "player_id" not in st.session_state:
     st.session_state.player_id = None
 if "player_name" not in st.session_state:
     st.session_state.player_name = ""
-if "shuffled_questions" not in st.session_state:
-    st.session_state.shuffled_questions = None
 
-# 問題読み込みとセッション保存（シャッフル対応）
 raw_questions = load_questions()
-if st.session_state.shuffled_questions is None:
-    # 起動時・初期化時に問題をランダムにシャッフル
-    shuffled = raw_questions.copy()
-    random.seed(int(time.time()))
-    random.shuffle(shuffled)
-    st.session_state.shuffled_questions = shuffled
-
-questions = st.session_state.shuffled_questions
 
 # ==========================================
 # メイン画面分岐
@@ -289,11 +287,6 @@ if not st.session_state.room_id:
                     )
                 )
 
-                # ゲーム開始時に問題を再シャッフル
-                shuffled = raw_questions.copy()
-                random.shuffle(shuffled)
-                st.session_state.shuffled_questions = shuffled
-
                 st.session_state.room_id = new_room_id
                 st.session_state.player_name = host_name
                 st.session_state.player_id = res.data[0]["id"]
@@ -335,10 +328,6 @@ if not st.session_state.room_id:
                             }
                         )
                     )
-                    # ゲーム参加時に問題を再シャッフル
-                    shuffled = raw_questions.copy()
-                    random.shuffle(shuffled)
-                    st.session_state.shuffled_questions = shuffled
 
                     st.session_state.room_id = join_room_id.upper()
                     st.session_state.player_name = guest_name
@@ -398,8 +387,13 @@ else:
 
     # B-2. プレイ画面
     elif status == "playing":
-        # 問題数の上限・生存プレイヤーチェック
+        # 部屋IDを共通キーとして、全参加者にまったく同じ10問を抽出
+        questions = get_shuffled_10_questions(raw_questions, room_id)
+
+        # 生存プレイヤーチェック
         active_players = [p for p in players_data if p.get("hp", 100) > 0]
+
+        # 10問終了時、または全員HP0でリザルト画面へ
         if step >= len(questions) or len(active_players) == 0:
             safe_execute(
                 supabase.table("rooms")
@@ -426,13 +420,13 @@ else:
 
         st.divider()
 
-        # 問題表示
+        # 問題表示（全10問固定）
         st.header(f"第 {step + 1} 問 / {len(questions)}")
-        st.subheader(f"以下の英単語の意味を選択してください")
+        st.subheader("以下の英単語の意味を選択してください")
         st.markdown(f"# **{current_q['word']}**")
 
-        # 選択肢のシャッフル（毎問題ごとに一貫したランダム配置）
-        option_seed = f"{room_id}_{step}"
+        # 選択肢のシャッフル（部屋IDと問題番号から共通配置を生成）
+        option_seed = abs(hash(f"{room_id}_{step}")) % (2**32)
         shuffled_options = current_q["options"].copy()
         random.seed(option_seed)
         random.shuffle(shuffled_options)
@@ -450,7 +444,7 @@ else:
         if len(my_ans.data) > 0:
             st.success("回答を送信しました！他のプレイヤーの回答を待っています...")
         else:
-            # 4択ボタン（シャッフルされた選択肢を表示）
+            # 4択ボタン（全員同じランダム配置のボタンを表示）
             b_cols = st.columns(2)
             for idx, opt in enumerate(shuffled_options):
                 with b_cols[idx % 2]:
@@ -473,7 +467,9 @@ else:
                         )
 
                         # スコアとHPの更新計算
-                        me = next(p for p in players_data if p["id"] == player_id)
+                        me = next(
+                            p for p in players_data if p["id"] == player_id
+                        )
                         new_score = me.get("score", 0)
                         new_hp = me.get("hp", 100)
                         new_combo = me.get("combo", 0)
@@ -547,5 +543,4 @@ else:
 
         if st.button("ロビーへ戻る"):
             st.session_state.room_id = None
-            st.session_state.shuffled_questions = None
             st.rerun()
