@@ -197,6 +197,8 @@ def load_questions():
     df = pd.read_csv(csv_path)
     questions = []
     for _, row in df.iterrows():
+        # 正解は option1 または answer カラムから取得
+        ans = str(row["answer"]) if "answer" in row and pd.notna(row["answer"]) else str(row["option1"])
         opts = [
             str(row["option1"]),
             str(row["option2"]),
@@ -204,12 +206,10 @@ def load_questions():
             str(row["option4"]),
         ]
         questions.append(
-            {"word": row["word"], "options": opts, "answer": str(row["answer"])}
+            {"word": row["word"], "options": opts, "answer": ans}
         )
     return questions
 
-
-questions = load_questions()
 
 # ==========================================
 # セッション状態の初期化
@@ -220,7 +220,19 @@ if "player_id" not in st.session_state:
     st.session_state.player_id = None
 if "player_name" not in st.session_state:
     st.session_state.player_name = ""
+if "shuffled_questions" not in st.session_state:
+    st.session_state.shuffled_questions = None
 
+# 問題読み込みとセッション保存（シャッフル対応）
+raw_questions = load_questions()
+if st.session_state.shuffled_questions is None:
+    # 起動時・初期化時に問題をランダムにシャッフル
+    shuffled = raw_questions.copy()
+    random.seed(int(time.time()))
+    random.shuffle(shuffled)
+    st.session_state.shuffled_questions = shuffled
+
+questions = st.session_state.shuffled_questions
 
 # ==========================================
 # メイン画面分岐
@@ -277,6 +289,11 @@ if not st.session_state.room_id:
                     )
                 )
 
+                # ゲーム開始時に問題を再シャッフル
+                shuffled = raw_questions.copy()
+                random.shuffle(shuffled)
+                st.session_state.shuffled_questions = shuffled
+
                 st.session_state.room_id = new_room_id
                 st.session_state.player_name = host_name
                 st.session_state.player_id = res.data[0]["id"]
@@ -318,6 +335,11 @@ if not st.session_state.room_id:
                             }
                         )
                     )
+                    # ゲーム参加時に問題を再シャッフル
+                    shuffled = raw_questions.copy()
+                    random.shuffle(shuffled)
+                    st.session_state.shuffled_questions = shuffled
+
                     st.session_state.room_id = join_room_id.upper()
                     st.session_state.player_name = guest_name
                     st.session_state.player_id = res.data[0]["id"]
@@ -409,6 +431,12 @@ else:
         st.subheader(f"以下の英単語の意味を選択してください")
         st.markdown(f"# **{current_q['word']}**")
 
+        # 選択肢のシャッフル（毎問題ごとに一貫したランダム配置）
+        option_seed = f"{room_id}_{step}"
+        shuffled_options = current_q["options"].copy()
+        random.seed(option_seed)
+        random.shuffle(shuffled_options)
+
         # すでにこの問題に回答しているか確認
         my_ans = (
             supabase.table("answers")
@@ -422,12 +450,12 @@ else:
         if len(my_ans.data) > 0:
             st.success("回答を送信しました！他のプレイヤーの回答を待っています...")
         else:
-            # 4択ボタン
+            # 4択ボタン（シャッフルされた選択肢を表示）
             b_cols = st.columns(2)
-            for idx, opt in enumerate(current_q["options"]):
+            for idx, opt in enumerate(shuffled_options):
                 with b_cols[idx % 2]:
                     if st.button(
-                        opt, key=f"opt_{idx}", use_container_width=True
+                        opt, key=f"opt_{step}_{idx}", use_container_width=True
                     ):
                         is_correct = opt == current_q["answer"]
 
@@ -519,4 +547,5 @@ else:
 
         if st.button("ロビーへ戻る"):
             st.session_state.room_id = None
+            st.session_state.shuffled_questions = None
             st.rerun()
